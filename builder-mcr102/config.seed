@@ -1,0 +1,46 @@
+CONFIG_TARGET_sunxi=y
+CONFIG_TARGET_sunxi_cortexa7=y
+CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-zero=y
+CONFIG_TARGET_ROOTFS_PARTSIZE=1024
+CONFIG_SUNXI_SD_BOOT_PARTSIZE=20
+
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-app-firewall=y
+CONFIG_PACKAGE_luci-app-package-manager=y
+CONFIG_PACKAGE_luci-app-5gmodem=y
+CONFIG_PACKAGE_luci-app-openvpn=y
+CONFIG_LUCI_LANG_ru=y
+
+# OpenVPN is built into the firmware together with the exact kernel modules
+# for this custom kernel ABI. This avoids runtime APK failures when official
+# repositories do not provide matching kmods for the custom image.
+CONFIG_PACKAGE_openvpn-openssl=y
+CONFIG_PACKAGE_kmod-tun=y
+CONFIG_PACKAGE_kmod-ovpn-backports=y
+CONFIG_OPENVPN_openssl_ENABLE_DCO=y
+
+# Build Podkop/sing-box kernel dependencies against this firmware's kernel.
+# Podkop itself can then be installed with its upstream APK installer.
+CONFIG_PACKAGE_kmod-inet-diag=y
+CONFIG_PACKAGE_kmod-nft-tproxy=y
+
+CONFIG_PACKAGE_kmod-phy-smsc=y
+CONFIG_PACKAGE_kmod-usb-net=y
+CONFIG_PACKAGE_kmod-usb-net-smsc95xx=y
+CONFIG_PACKAGE_kmod-usb-net-qmi-wwan=y
+CONFIG_PACKAGE_kmod-usb-net-cdc-mbim=y
+CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y
+CONFIG_PACKAGE_kmod-usb-net-rndis=y
+CONFIG_PACKAGE_kmod-usb-serial=y
+CONFIG_PACKAGE_kmod-usb-serial-option=y
+CONFIG_PACKAGE_kmod-usb-serial-qualcomm=y
+CONFIG_PACKAGE_kmod-usb-acm=y
+CONFIG_PACKAGE_kmod-usb-wdm=y
+CONFIG_PACKAGE_uqmi=y
+CONFIG_PACKAGE_qmi-utils=y
+CONFIG_PACKAGE_mbim-utils=y
+CONFIG_PACKAGE_modemmanager=y
+CONFIG_PACKAGE_usb-modeswitch=y
+CONFIG_PACKAGE_usbutils=y
+CONFIG_PACKAGE_sms-tool=y
+CONFIG_PACKAGE_comgt=y

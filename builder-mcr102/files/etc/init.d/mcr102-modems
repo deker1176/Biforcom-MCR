@@ -1,0 +1,136 @@
+#!/bin/sh /etc/rc.common
+START=15
+STOP=10
+
+set_gpio_high() {
+    local n="$1" d="/sys/class/gpio/gpio$1"
+
+    if [ ! -d "$d" ]; then
+        if ! echo "$n" > /sys/class/gpio/export; then
+            logger -t mcr102 "Could not export GPIO$n"
+            return 1
+        fi
+    fi
+
+    # Set direction and initial value in one operation to avoid a low pulse.
+    if echo high > "$d/direction"; then
+        logger -t mcr102 "GPIO$n=1"
+    else
+        logger -t mcr102 "Could not enable modem power on GPIO$n"
+        return 1
+    fi
+}
+
+remove_invalid_modem_feed() {
+    # luci-app-5gmodem is compiled into the firmware from an external build
+    # feed. That build-only feed must not be exposed as an OpenWrt runtime
+    # APK repository because downloads.openwrt.org has no /modem feed.
+    for f in /etc/apk/repositories /etc/apk/repositories.d/*; do
+        [ -f "$f" ] || continue
+        if grep -q '/modem/packages\.adb' "$f" 2>/dev/null; then
+            sed -i '\|/modem/packages\.adb|d' "$f"
+            logger -t mcr102 "Removed invalid runtime APK modem feed from $f"
+        fi
+    done
+}
+
+restart_firewall_after_qmi() {
+    # ifup only queues setup in netifd. Wait for the QMI L3 device to have
+    # IPv4, including addresses supplied by a dynamically named DHCP child.
+    pending="$*"
+    elapsed=0
+    ready=0
+    while [ "$elapsed" -lt 90 ]; do
+        pending=""
+        ready=0
+        for iface in "$@"; do
+            status="$(ifstatus "$iface" 2>/dev/null)"
+            up="$(printf '%s' "$status" | jsonfilter -e '@.up' 2>/dev/null)"
+            device="$(printf '%s' "$status" | jsonfilter -e '@.l3_device' 2>/dev/null)"
+            if [ "$up" = "true" ] && [ -n "$device" ] &&
+                ip -4 addr show dev "$device" scope global 2>/dev/null | grep -q 'inet '; then
+                ready=$((ready + 1))
+            else
+                pending="$pending $iface"
+            fi
+        done
+        [ -z "$pending" ] && break
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+
+    if [ "$ready" -eq 0 ]; then
+        logger -t mcr102 "No restarted QMI interface has IPv4 after 90s; skipping firewall restart"
+        return 0
+    fi
+    [ -z "$pending" ] ||
+        logger -t mcr102 "QMI IPv4 wait timed out for:$pending; continuing with $ready ready interface(s)"
+
+    # Allow the DHCP child and its firewall hotplug updates to settle.
+    sleep 5
+    logger -t mcr102 "Restarting firewall after delayed QMI restart ($ready IPv4 interface(s) ready)"
+    if /etc/init.d/firewall restart; then
+        logger -t mcr102 "Firewall restart after QMI completed"
+    else
+        logger -t mcr102 "Firewall restart after QMI failed"
+        return 1
+    fi
+}
+
+delayed_qmi_restart() {
+    # The internal modem can expose cdc-wdm before its QMI service is fully
+    # ready. Two cold-boot tests showed that a delayed interface restart fixes
+    # the race and reliably brings up the DHCP child interface/default route.
+    i=0
+    while [ "$i" -lt 40 ]; do
+        if ls /dev/cdc-wdm* >/dev/null 2>&1; then
+            logger -t mcr102 "QMI control device detected after ${i}s"
+            break
+        fi
+        sleep 1
+        i=$((i + 1))
+    done
+
+    if ! ls /dev/cdc-wdm* >/dev/null 2>&1; then
+        logger -t mcr102 "No cdc-wdm device found after 40s; skipping delayed QMI restart"
+        return 0
+    fi
+
+    logger -t mcr102 "Waiting 10s for modem QMI initialization"
+    sleep 10
+
+    restarted=""
+    for iface in $(uci -q show network | sed -n "s/^network\.\([^.=]*\)\.proto='qmi'$/\1/p"); do
+        [ "$(uci -q get network.$iface.auto)" = "0" ] && continue
+        [ "$(uci -q get network.$iface.disabled)" = "1" ] && continue
+
+        device="$(uci -q get network.$iface.device)"
+        case "$device" in
+            /dev/cdc-wdm*) [ -c "$device" ] || continue ;;
+        esac
+
+        logger -t mcr102 "Restarting QMI interface $iface after modem initialization"
+        ifdown "$iface" 2>/dev/null || true
+        sleep 2
+        if ifup "$iface" 2>/dev/null; then
+            restarted="$restarted $iface"
+        else
+            logger -t mcr102 "Failed to request QMI restart for $iface"
+        fi
+    done
+
+    [ -n "$restarted" ] || return 0
+    restart_firewall_after_qmi $restarted
+}
+
+start() {
+    remove_invalid_modem_feed
+
+    # PA10 and PA13 are the active-high modem supply enables from v1.13.
+    set_gpio_high 10 || true
+    sleep 5
+    set_gpio_high 13 || true
+
+    # Do not block the rest of OpenWrt boot while the modem finishes starting.
+    delayed_qmi_restart &
+}
