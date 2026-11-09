@@ -1,0 +1,62 @@
+name: Publish OpenWrt 25.12.5 for MCR-102
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - mcr102-openwrt-25.12.5
+    paths:
+      - '.github/workflows/publish-mcr102-v1.0.yml'
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BUILD_RUN: '42523812235'
+      BUILD_COMMIT: d6f9671e7403a449b52fd2e66146a6535b96fc08
+      RELEASE_TAG: mcr102-v1.0
+    steps:
+      - name: Download and verify the MCR-102 image
+        run: |
+          set -euo pipefail
+          test "$(gh run view "$BUILD_RUN" --json headSha,conclusion --jq '.headSha + ":" + .conclusion')" = "$BUILD_COMMIT:success"
+          gh run download "$BUILD_RUN" --name openwrt-25.12.5-biforcom-mcr102 --dir release-assets
+          cd release-assets
+          image=openwrt-25.12.5-biforcom-mcr102-squashfs-sdcard.img.gz
+          config=openwrt-25.12.5-mcr102.config
+          expected="$(awk 'NR == 1 {print $1}' SHA256SUMS)"
+          actual="$(sha256sum "$image" | awk '{print $1}')"
+          test "$expected" = "$actual"
+          gzip -t "$image"
+          grep -qx 'CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-zero=y' "$config"
+          for package in luci-app-5gmodem openvpn-openssl kmod-ovpn-backports kmod-inet-diag kmod-nft-tproxy; do
+            grep -qx "CONFIG_PACKAGE_$package=y" "$config"
+          done
+          sha256sum "$image" > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish the release
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<'EOF'
+          Первая сборка OpenWrt 25.12.5 для Biforcom MCR-102 на Orange Pi Zero (Allwinner H2+).
+
+          - Три Ethernet-порта в одном LAN-мосту.
+          - Поддержка плат с одним или двумя LTE-модемами; отложенный запуск QMI и перезапуск firewall после появления IPv4.
+          - Русский LuCI, управление модемами, OpenVPN с DCO и модули ядра для отдельной установки Podkop.
+
+          Проверьте SHA-256 по файлу SHA256SUMS. Распакуйте образ .img.gz, запишите .img на microSD и загрузите роутер с неё. Для первой проверки используйте отдельную карту с чистыми настройками.
+
+          Образ собран GitHub Actions; работа на реальном MCR-102 ещё не подтверждена.
+          EOF
+          gh release create "$RELEASE_TAG" release-assets/* \
+            --target "$BUILD_COMMIT" \
+            --title 'Biforcom MCR-102 — OpenWrt 25.12.5 v1.0' \
+            --notes-file release-notes.md \
+            --latest=false
